@@ -1,0 +1,91 @@
+name: "YOLO11_DET_PRE_POSTPROCESS"
+backend: "yolo11_postprocess"
+max_batch_size: 0
+
+# Decoding and NMS parameters. Triton's ModelParameter only carries a string,
+# so every value is quoted; changing any of these needs no rebuild.
+parameters: {
+  key: "num_classes"
+  value: { string_value: "80" }
+}
+# Confidence gate applied before NMS.
+parameters: {
+  key: "confidence_threshold"
+  value: { string_value: "0.25" }
+}
+parameters: {
+  key: "iou_threshold"
+  value: { string_value: "0.45" }
+}
+# Detections kept after NMS, and candidates considered before it.
+parameters: {
+  key: "max_detections"
+  value: { string_value: "300" }
+}
+parameters: {
+  key: "max_candidates"
+  value: { string_value: "8400" }
+}
+# Layout of the raw tensor: [1, 4 + num_classes, anchors].
+parameters: {
+  key: "output_format"
+  value: { string_value: "channel_first" }
+}
+# The Ascend .om already applies the class activation, so nothing is added here.
+parameters: {
+  key: "score_activation"
+  value: { string_value: "none" }
+}
+# Box encoding used by the export: centre/size, or corners.
+parameters: {
+  key: "box_format"
+  value: { string_value: "xywh" }
+}
+
+input [
+  {
+    name: "PREDICTIONS"
+    data_type: TYPE_FP32
+    dims: [ 1, 84, 8400 ]
+  },
+  {
+    # Supplied by yolo_preprocess in the ensemble. Optional so the model can
+    # also be called on its own, in which case boxes stay in canvas
+    # coordinates instead of being mapped back to the source image.
+    name: "TRANSFORM_METADATA"
+    data_type: TYPE_FP32
+    dims: [ 6 ]
+    optional: true
+  }
+]
+
+output [
+  {
+    name: "NUM_DETS"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+  },
+  {
+    name: "DETECTION_BOXES"
+    data_type: TYPE_FP32
+    dims: [ -1, 4 ]
+  },
+  {
+    name: "DETECTION_SCORES"
+    data_type: TYPE_FP32
+    dims: [ -1 ]
+  },
+  {
+    name: "DETECTION_CLASSES"
+    data_type: TYPE_INT32
+    dims: [ -1 ]
+  }
+]
+
+instance_group [
+  {
+    # Pure host CPU work, so no device is requested.
+    kind: KIND_CPU
+    count: 1
+  }
+]

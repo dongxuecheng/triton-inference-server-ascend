@@ -1,0 +1,49 @@
+services:
+  triton-ascend:
+    image: ${TRITON_IMAGE:-nvcr.io/nvidia/tritonserver:24.10-py3}
+    container_name: ${TRITON_CONTAINER_NAME:-triton-ascend}
+    # ACL needs full device access on this driver setup; narrow this to the
+    # specific device nodes once your environment allows it.
+    privileged: true
+    # Published ports rather than host networking, so the container keeps its own
+    # network namespace and the host ports are stated outright. Triton listens on
+    # 8000/8001/8002 inside the container; only the left-hand numbers are visible
+    # from the host, so a client uses those and never the container's.
+    ports:
+      - "${TRITON_HTTP_PORT:-54245}:8000"
+      - "${TRITON_GRPC_PORT:-54246}:8001"
+      - "${TRITON_METRICS_PORT:-54247}:8002"
+    # System shared memory is a host resource: without a shared IPC namespace
+    # the client's /dev/shm segment is invisible to the server inside the
+    # container, and SHM inference fails with "Unable to open shared memory
+    # region". That is the IPC namespace, so it is independent of the network
+    # setup above, and HTTP and gRPC do not need it.
+    ipc: host
+    environment:
+      ASCEND_HOME_PATH: /ascend-toolkit/latest
+      ASCEND_DEVICE_ID: ${ASCEND_DEVICE_ID:-0}
+      # Optional fallback for models that do not set `model_path` themselves.
+      YOLO_MODEL_PATH: ${YOLO_MODEL_PATH_IN_CONTAINER:-}
+      ASCEND_CANVAS_SLOTS: ${ASCEND_CANVAS_SLOTS:-8}
+      LD_LIBRARY_PATH: "/ascend-toolkit/latest/runtime/lib64:/ascend-toolkit/latest/aarch64-linux/lib64:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64"
+      # What scripts/serve.sh passes to Triton; the `ports` above map these out.
+      TRITON_HTTP_PORT: 8000
+      TRITON_GRPC_PORT: 8001
+      TRITON_METRICS_PORT: 8002
+      TRITON_LOG_VERBOSE: ${TRITON_LOG_VERBOSE:-0}
+    volumes:
+      # The whole toolkit is mounted because the `latest` symlink resolves to a
+      # sibling versioned directory.
+      - ${ASCEND_TOOLKIT_ROOT:-/usr/local/Ascend/ascend-toolkit}:/ascend-toolkit:ro
+      - /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+      - /etc/ascend_install.info:/etc/ascend_install.info:ro
+      - ./workspace/models:/models:ro
+      - ./workspace/models_to_load.txt:/models_to_load.txt:ro
+      - ./scripts/serve.sh:/serve.sh:ro
+      # The compiled model is mounted outside /models: Docker rejects a bind
+      # mount nested inside another read-only bind mount.
+      - ${YOLO_MODEL_HOST_PATH:-./workspace/models/yolo11s.om}:/yolo/yolo11s.om:ro
+      # Uncomment once a YOLO26 `.om` exists and YOLO26_DET_PRE points at it.
+      # - ${YOLO26_MODEL_HOST_PATH}:/yolo/yolo26.om:ro
+    entrypoint: ["/bin/bash", "/serve.sh"]
+    restart: unless-stopped

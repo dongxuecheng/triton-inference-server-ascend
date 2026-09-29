@@ -1,0 +1,65 @@
+name: "YOLO26_DET_PRE_POSTPROCESS"
+backend: "yolo26_postprocess"
+max_batch_size: 0
+
+# YOLO26 is end-to-end, so there is no `num_classes`, `iou_threshold` or
+# `output_format` here: the class is part of every row and the model has already
+# resolved the overlaps. Triton's ModelParameter only carries a string, so every
+# value is quoted.
+parameters: {
+  key: "confidence_threshold"
+  value: { string_value: "0.25" }
+}
+parameters: {
+  key: "max_detections"
+  value: { string_value: "300" }
+}
+
+input [
+  {
+    # One row per detection: x1, y1, x2, y2, score, class.
+    name: "PREDICTIONS"
+    data_type: TYPE_FP32
+    dims: [ 1, 300, 6 ]
+  },
+  {
+    # Supplied by YOLO_640_LETTERBOX_PREPROCESS in the ensemble. Optional so the
+    # model can also be called on its own, in which case boxes stay in canvas
+    # coordinates instead of being mapped back to the source image.
+    name: "TRANSFORM_METADATA"
+    data_type: TYPE_FP32
+    dims: [ 6 ]
+    optional: true
+  }
+]
+
+output [
+  {
+    name: "NUM_DETS"
+    data_type: TYPE_INT32
+    dims: [ 1 ]
+  },
+  {
+    name: "DETECTION_BOXES"
+    data_type: TYPE_FP32
+    dims: [ -1, 4 ]
+  },
+  {
+    name: "DETECTION_SCORES"
+    data_type: TYPE_FP32
+    dims: [ -1 ]
+  },
+  {
+    name: "DETECTION_CLASSES"
+    data_type: TYPE_INT32
+    dims: [ -1 ]
+  }
+]
+
+instance_group [
+  {
+    # Pure host CPU work, so no device is requested.
+    kind: KIND_CPU
+    count: 1
+  }
+]

@@ -1,0 +1,47 @@
+name: "YOLO26_DET_PRE_HOST"
+backend: "yolo26_infer"
+max_batch_size: 0
+
+# YOLO26 inference from a canvas the caller already has in host memory.
+#
+# `YOLO26_DET_PRE` takes `NV12_REF`, the 8 byte device address the preprocess
+# backend publishes, which is how the ensemble avoids moving the canvas through
+# host memory. That is no use to a caller that produced the canvas itself - a
+# camera pipeline, DVPP, or any YUV source - so this model is the same backend
+# behind the host tensor instead, exactly as `YOLO11_DET_PRE_HOST` is to
+# `YOLO11_DET_PRE`.
+#
+# The canvas must already be letterboxed to the size below. The model reads its
+# shape from the `.om` and checks it against the dims declared here.
+parameters: {
+  key: "model_path"
+  value: { string_value: "/models/YOLO26_DET_PRE_HOST/1/yolo26s.om" }
+}
+parameters: {
+  key: "device_id"
+  value: { string_value: "0" }
+}
+
+input [
+  {
+    # Packed NV12, 640x640 image: 640 image rows then 320 interleaved U,V rows.
+    name: "NV12"
+    data_type: TYPE_UINT8
+    dims: [ 1, 960, 640, 1 ]
+  }
+]
+
+output [
+  {
+    name: "PREDICTIONS"
+    data_type: TYPE_FP32
+    dims: [ 1, 300, 6 ]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_CPU
+    count: 1
+  }
+]

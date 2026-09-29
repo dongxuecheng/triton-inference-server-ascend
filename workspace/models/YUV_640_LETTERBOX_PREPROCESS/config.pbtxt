@@ -1,0 +1,81 @@
+name: "YUV_640_LETTERBOX_PREPROCESS"
+backend: "preprocess"
+max_batch_size: 0
+
+# Letterbox for a caller that already holds NV12, with no colour conversion
+# anywhere on the path.
+#
+# The sibling `YOLO_640_LETTERBOX_PREPROCESS` takes a decoded BGR frame and has to
+# convert it to YUV before writing the canvas. A camera, DVPP or any other YUV
+# pipeline already produces the form the model wants, so this model resamples the
+# source planes as they are: luma with the usual letterbox mapping, chroma with
+# the same mapping in half resolution space.
+#
+# Everything downstream is identical, because the output contract is: the same
+# `NV12`, `NV12_REF` and `TRANSFORM_METADATA` tensors, so the existing inference
+# and postprocess models and ensembles work with it unchanged.
+#
+# Triton's ModelParameter only carries a string, so every value is quoted.
+parameters: {
+  key: "target_height"
+  value: { string_value: "640" }
+}
+parameters: {
+  key: "target_width"
+  value: { string_value: "640" }
+}
+# Neutral BT.601 limited-range gray for the letterbox border, matching what the
+# source planes already carry.
+parameters: {
+  key: "pad_luma"
+  value: { string_value: "114" }
+}
+parameters: {
+  key: "pad_chroma"
+  value: { string_value: "128" }
+}
+parameters: {
+  key: "kernel_blocks"
+  value: { string_value: "8" }
+}
+parameters: {
+  key: "even_align"
+  value: { string_value: "true" }
+}
+
+input [
+  {
+    # Packed NV12 at the source resolution: rows is 1.5x columns, and the second
+    # third of the rows holds interleaved U,V pairs.
+    name: "YUV"
+    data_type: TYPE_UINT8
+    dims: [ -1, -1, 1 ]
+  }
+]
+
+output [
+  {
+    name: "NV12"
+    data_type: TYPE_UINT8
+    dims: [ 1, 960, 640, 1 ]
+  },
+  {
+    name: "NV12_REF"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  },
+  {
+    # Letterbox geometry for the postprocess backend:
+    # scale_x, scale_y, pad_left, pad_top, source_width, source_height.
+    name: "TRANSFORM_METADATA"
+    data_type: TYPE_FP32
+    dims: [ 6 ]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_CPU
+    count: 1
+  }
+]

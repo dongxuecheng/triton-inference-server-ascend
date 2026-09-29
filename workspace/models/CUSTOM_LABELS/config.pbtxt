@@ -1,0 +1,43 @@
+# Serves the class-name list for a model, so a client can ask the server what a
+# class id means instead of hard-coding a table. That also means a custom-trained
+# model needs no client change: drop a names file next to it.
+#
+# This is the one model here that is not a compiled Ascend backend. It is a
+# Python backend model, so it needs no `.so`, no device and no canvas, and it is
+# cheap enough to stay loaded at all times (scripts/serve.sh always appends it to
+# the load list). It has no version directory contents beyond `model.py`.
+
+name: "CUSTOM_LABELS"
+backend: "python"
+max_batch_size: 0
+
+input [
+  {
+    name: "model_name"
+    data_type: TYPE_STRING
+    dims: [1]
+  }
+]
+
+output [
+  {
+    # One entry per class, in class-id order, so class id N is labels[N]. An
+    # unknown model name returns an empty tensor rather than an error, so a
+    # caller can just fall back to its own table.
+    name: "labels"
+    data_type: TYPE_STRING
+    dims: [-1]
+  }
+]
+
+parameters: {
+  key: "names_directory"
+  value: { string_value: "/models/CUSTOM_LABELS/names" }
+}
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_CPU
+  }
+]

@@ -1,0 +1,7 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}",
+    "cmake.configureSettings": {
+        "TRITON_CORE_INCLUDE_DIR": "${workspaceFolder}/third_party/triton/include",
+        "SOC_VERSION": "Ascend310P3"
+    }
+}

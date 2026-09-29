@@ -1,0 +1,25 @@
+# Build output
+build/
+
+# Python caches from the client under workspace/
+__pycache__/
+*.pyc
+
+# Images rendered by workspace/triton_client/visualize.py
+workspace/detections/
+
+# Local configuration derived from .env.example
+.env
+
+# Deployment copies of the backend libraries. They are produced by build.sh
+# from the build tree, so they are not tracked.
+workspace/models/*/1/*.so
+
+# Compiled model artefacts. They are large and reproducible from the export with
+# scripts/convert_yolo26.sh, so they stay out of the tree.
+*.om
+*.plan
+*.onnx
+ge_check_op.json
+check_result.json
+fusion_result.json

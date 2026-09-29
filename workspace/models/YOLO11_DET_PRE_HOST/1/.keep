@@ -1,0 +1,1 @@
+This backend model version has no separate model artifact; it runs the .om named by YOLO_MODEL_PATH.

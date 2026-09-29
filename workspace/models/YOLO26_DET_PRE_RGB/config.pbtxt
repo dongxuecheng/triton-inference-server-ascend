@@ -1,0 +1,54 @@
+name: "YOLO26_DET_PRE_RGB"
+backend: "yolo26_infer"
+max_batch_size: 0
+
+# YOLO26 inference from a model converted *without* AIPP.
+#
+# The sibling `YOLO26_DET_PRE` runs the same network with a static AIPP, so it
+# consumes a packed NV12 canvas. With no AIPP the model keeps its ONNX image
+# input and reads that instead: FP32, RGB, planar, scaled to [0, 1]. The only
+# difference between the two models is this parameter and the file it points at.
+#
+# The compiled model sits in this model's version directory, so the repository
+# stays self-contained. Its input shape and detection-row layout are read from
+# the file and checked against the dims declared below.
+parameters: {
+  key: "model_path"
+  value: { string_value: "/models/YOLO26_DET_PRE_RGB/1/yolo26s_noaipp.om" }
+}
+# NPU to load the model onto. Defaults to ASCEND_DEVICE_ID when unset.
+parameters: {
+  key: "device_id"
+  value: { string_value: "0" }
+}
+# `nv12` (the default) expects the canvas `preprocess` writes; `rgb_chw` expects
+# the image tensor `rgb_preprocess` writes. Pair it with that backend's model in
+# an ensemble.
+parameters: {
+  key: "input_format"
+  value: { string_value: "rgb_chw" }
+}
+
+input [
+  {
+    # The ONNX image input, produced by YOLO_640_LETTERBOX_PREPROCESS_RGB.
+    name: "RGB_CHW"
+    data_type: TYPE_FP32
+    dims: [ 1, 3, 640, 640 ]
+  }
+]
+
+output [
+  {
+    name: "PREDICTIONS"
+    data_type: TYPE_FP32
+    dims: [ 1, 300, 6 ]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_CPU
+    count: 1
+  }
+]

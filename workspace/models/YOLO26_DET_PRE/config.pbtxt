@@ -1,0 +1,43 @@
+name: "YOLO26_DET_PRE"
+backend: "yolo26_infer"
+max_batch_size: 0
+
+# The compiled Ascend model this backend runs. It sits in this model's version
+# directory, so the repository stays self-contained and needs no extra mount.
+# The canvas size and the detection-row layout are read from that file and
+# checked against the dims declared below.
+parameters: {
+  key: "model_path"
+  value: { string_value: "/models/YOLO26_DET_PRE/1/yolo26s.om" }
+}
+# NPU to load the model onto. Defaults to ASCEND_DEVICE_ID when unset.
+parameters: {
+  key: "device_id"
+  value: { string_value: "0" }
+}
+
+# Device pass-through input: the 8 byte handle published by the preprocess
+# backend carries the device address of an NV12 canvas, so the ensemble never
+# moves the canvas through host memory.
+input [
+  {
+    name: "NV12_REF"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  }
+]
+
+output [
+  {
+    name: "PREDICTIONS"
+    data_type: TYPE_FP32
+    dims: [ 1, 300, 6 ]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_CPU
+    count: 1
+  }
+]

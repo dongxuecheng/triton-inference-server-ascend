@@ -1,0 +1,43 @@
+name: "YOLO11_DET_PRE"
+backend: "yoloinfer"
+max_batch_size: 0
+
+# The compiled Ascend model this backend runs. Point it at another .om to swap
+# the network; the input/output geometry is read from that file and checked
+# against the dims declared below.
+parameters: {
+  key: "model_path"
+  value: { string_value: "/yolo/yolo11s.om" }
+}
+# NPU to load the model onto. Defaults to ASCEND_DEVICE_ID when unset.
+parameters: {
+  key: "device_id"
+  value: { string_value: "0" }
+}
+
+# Device pass-through input: the 8 byte handle published by yolo_preprocess
+# carries the device address of an NV12 canvas, so the ensemble never moves the
+# canvas through host memory. Triton requires each declared input of an ensemble
+# step to be mapped, which is why the host-tensor variant is a separate model.
+input [
+  {
+    name: "NV12_REF"
+    data_type: TYPE_INT64
+    dims: [ 1 ]
+  }
+]
+
+output [
+  {
+    name: "PREDICTIONS"
+    data_type: TYPE_FP32
+    dims: [ 1, 84, 8400 ]
+  }
+]
+
+instance_group [
+  {
+    kind: KIND_CPU
+    count: 1
+  }
+]
