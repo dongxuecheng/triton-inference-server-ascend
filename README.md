@@ -1,415 +1,161 @@
 # Ascend Triton YOLO 推理服务
 
-麒麟 ARM64 / Docker 18.09 / Compose 1.22、宿主机不安装 Toolkit 的部署方式，见
-[内置 CANN 9.0.0 镜像部署指南](docs/deploy-cann-container.md)。该方式单独使用
-`Dockerfile.cann` 和 `docker-compose.cann.yml`，原有宿主机 Toolkit 挂载方式保持不变。
-已有 A 机器成功配置、需要先在 A 验证再迁移 B 的步骤，见
-[A/B 验证与镜像迁移](docs/validate-a-then-b.md)。
+运行在 ARM64 / Ascend 310P3 上的 Triton 自定义后端。CANN 9.0.0、Ascend C 内核和后端库均在容器镜像内构建、提供，宿主机无需安装 CANN Toolkit。
 
-这是运行在 Ascend 310P3 上的 Triton 自定义后端项目，支持 YOLO11、YOLO26，以及 BGR、NV12/YUV420SP 和无 AIPP 的 RGB 输入路径。
+默认部署提供 `YOLO26_DET_PRE_YUV_ENSEMBLE`：原始 NV12 → NPU letterbox → YOLO26 AIPP 推理 → 检测框后处理。适用于 AIDetection 从 rtspGrpcServer 取得 NV12 后直接推理的链路。
 
-项目提供 C++ Triton 后端、Ascend C 预处理内核、YOLO 推理与后处理后端、Triton 模型仓库、Docker Compose 服务配置，以及 Python 客户端和结果可视化工具。
+A 机器已完成内置 CANN 镜像的实际验证：310P3、驱动 25.0.rc1.1、ACL 逻辑设备 1；1920×1080 测试图返回 9 个 person，单次客户端推理计时为 16.4 ms。该值不包含测试图转 NV12 的时间，也不是 B 机器或并发负载下的性能保证。
 
-## 目录结构
+**A 机器迁移到 B（麒麟）的完整命令见 [镜像迁移指南](docs/validate-a-then-b.md)。可以直接导出 A 已验证的镜像，B 无需重新编译。**
+
+## 部署文件
 
 ```text
-src/                         Triton C++ 后端与 Ascend C 内核
-  common/                    ACL 模型封装、画布池、配置解析
-  preprocess/                BGR/NV12 -> NV12 letterbox
-  rgb_preprocess/            BGR -> RGB_CHW letterbox
-  yoloinfer/                 YOLO11 ACL 推理
-  yolo26_infer/              YOLO26 ACL 推理
-  yolo11_postprocess/        YOLO11 解码与 NMS
-  yolo26_postprocess/        YOLO26 阈值过滤与坐标还原
-workspace/models/            Triton 模型仓库；配置随代码管理，权重和 .so 不提交
-workspace/triton_client/     HTTP、gRPC、SHM 客户端、基准和可视化脚本
-workspace/atc/               ATC 静态 AIPP 配置
-workspace/models_to_load.txt 服务启动时加载的模型清单
-scripts/                     Triton 头文件获取、模型转换、服务启动脚本
-build.sh                     编译并部署后端库
-docker-compose.yml           Triton 容器、Ascend 设备和端口配置
+Dockerfile                   CANN 编译阶段 + Triton 运行阶段
+docker-compose.yml           唯一部署入口，兼容 Compose 1.22 格式 2.4
+.env.example                 镜像、设备、OM 路径及端口配置
+docker/                      CANN 环境、启动入口、ACL 设备预检
+src/                         C++ 后端、Ascend C 预处理内核
+cmake/                       CANN 头文件、运行库、Ascend C 工具定位
+build.sh                     Dockerfile 内部使用的编译与库部署脚本
+workspace/models/            模型配置和类别表；后端库在构建时生成
+workspace/models_to_load.txt 唯一的默认模型加载清单
+workspace/triton_client/     HTTP、gRPC、系统共享内存和可视化客户端
+workspace/atc/               NV12 静态 AIPP 配置
+scripts/                     启动、容器内模型转换、Triton 头文件提取
+requirements-client.txt      宿主机图片测试所需 Python 依赖
 ```
 
-## 支持的模型
+旧的宿主机 Toolkit 部署已删除。原 `.cann` 部署文件并入上述默认文件；已有 `.env.cann.a` / `.env.cann.b` 可继续 source，镜像变量仍使用 `TRITON_CANN_IMAGE` / `TRITON_CANN_CONTAINER_NAME`。
 
-| 模型 | 输入 | 用途 |
-| --- | --- | --- |
-| `YOLO11_DET_PRE_ENSEMBLE` | `IMAGE`：BGR `UINT8 [H,W,3]` | YOLO11 完整检测链 |
-| `YOLO26_DET_PRE_ENSEMBLE` | `IMAGE`：BGR `UINT8 [H,W,3]` | YOLO26 AIPP 完整检测链 |
-| `YOLO26_DET_PRE_RGB_ENSEMBLE` | `IMAGE`：BGR `UINT8 [H,W,3]` | YOLO26 无 AIPP/RGB 完整检测链 |
-| `YOLO26_DET_PRE_YUV_ENSEMBLE` | `YUV`：打包 NV12 `UINT8 [rows,W,1]` | 直接输入 NV12，不做颜色转换 |
-| `YOLO_640_LETTERBOX_PREPROCESS` | `IMAGE`：BGR | 单独执行 BGR 到 NV12 的 letterbox |
-| `YUV_640_LETTERBOX_PREPROCESS` | `YUV`：打包 NV12 | 单独执行 NV12 到 NV12 的 letterbox |
-| `YOLO_640_LETTERBOX_PREPROCESS_RGB` | `IMAGE`：BGR | 单独生成无 AIPP 模型使用的 RGB_CHW 张量 |
-| `YOLO11_DET_PRE`、`YOLO26_DET_PRE` | 内部 `NV12_REF` 设备句柄 | Ensemble 使用的设备内存推理模型 |
-| `YOLO11_DET_PRE_HOST`、`YOLO26_DET_PRE_HOST` | 已 letterbox 的 `NV12` 张量 | 调用方已有 640×640 NV12 画布时使用 |
-| `YOLO26_DET_PRE_RGB` | `RGB_CHW` FP32 | 无 AIPP YOLO26 推理模型 |
-| `YOLO11_DET_PRE_POSTPROCESS`、`YOLO26_DET_PRE_POSTPROCESS` | `PREDICTIONS` | 单独执行后处理 |
-| `CUSTOM_LABELS` | 模型名 | 返回对应模型的类别名称 |
+## 环境要求与边界
 
-检测 ensemble 输出 `NUM_DETS`、`DETECTION_BOXES`、`DETECTION_SCORES` 和 `DETECTION_CLASSES`。`NUM_DETS` 是有效结果数量；框默认映射回输入图像的像素坐标。
+- Linux `aarch64`、Ascend 310P3，宿主机已安装驱动和固件，`npu-smi info` 正常。
+- A 使用 `docker compose`；B 的 Docker 18.09 / Compose 1.22 使用 `docker-compose`。以下普通部署命令以 A 为例，B 替换命令前缀即可。
+- 宿主机提供 `/usr/local/Ascend/driver`、`/usr/local/Ascend/develop`、`/etc/ascend_install.info` 和设备节点。Compose 保留已验证的 `privileged: true`、`ipc: host`。
+- CANN 来自镜像内 `/usr/local/Ascend/cann-9.0.0`。不要挂载宿主机 Toolkit 或整个 `/usr/local/Ascend`，否则可能遮住镜像内容。
+- 默认链路只需要一个 YOLO26 NV12+AIPP `.om`，输出为 `[1,300,6]`；权重不在 Git 或镜像中，必须单独提供。
 
-## 环境要求
-
-- Ascend 310P3 主机、已安装并可访问的 Ascend 驱动和 CANN/Ascend C Toolkit。此项目在 CANN 8.2 环境验证，目标 SOC 默认为 `Ascend310P3`。
-- Docker Engine 和 Docker Compose 插件。
-- C++17 编译器、CMake 3.16 或更新版本，以及 `nproc`。
-- Triton 容器镜像默认使用 `nvcr.io/nvidia/tritonserver:24.10-py3`。镜像需要可拉取；若使用 NVIDIA NGC 私有镜像，请先按本机规定登录。
-- 要运行推理，必须另外准备 YOLO11 和/或 YOLO26 的 Ascend `.om` 模型。模型权重不包含在仓库内。
-- Python 客户端需要 Python 3、NumPy、OpenCV 和与服务兼容的 Triton 客户端 SDK。SHM 客户端另需 Linux System V 共享内存支持。
-
-确认 CANN 工具链和 ATC：
+## 首次配置
 
 ```bash
-export ASCEND_HOME_PATH="$HOME/Ascend/ascend-toolkit/latest"
-test -f "$ASCEND_HOME_PATH/include/acl/acl.h"
-test -x "$ASCEND_HOME_PATH/compiler/bin/atc"
-```
-
-如果 CANN 安装在其他位置，将 `ASCEND_HOME_PATH` 改为**包含 `include/acl/acl.h` 的 Toolkit 版本目录**，不要指向只包含版本目录的上级目录。
-
-确认 Docker Compose 和设备可见：
-
-```bash
-docker compose version
-npu-smi info
-```
-
-## 获取源码
-
-```bash
-git clone https://github.com/leon0514/triton-inference-server-ascend.git
+git clone https://github.com/dongxuecheng/triton-inference-server-ascend.git
 cd triton-inference-server-ascend
-```
-
-如果当前目录已经是源码目录，则不需要再次 clone。首次克隆后先确认仓库中没有 `.om`、`.onnx`、本地 `.env` 或编译后的 `.so`；这些是本地生成/部署文件，不由 Git 管理。
-
-## 编译并部署后端
-
-### 1. 准备 Triton C++ 头文件
-
-仓库附带用于编译的 Triton C API 头文件，`build.sh` 默认从 `third_party/triton/include` 查找。如果目录中缺少 `triton/core/tritonbackend.h`，可从 Triton 容器镜像提取：
-
-```bash
-scripts/fetch-triton-headers.sh
-```
-
-脚本默认使用 `nvcr.io/nvidia/tritonserver:24.10-py3`，因此需要 Docker 和可访问该镜像。也可以指定输出目录：
-
-```bash
-scripts/fetch-triton-headers.sh /path/to/triton/include
-```
-
-### 2. 编译和部署
-
-```bash
-export ASCEND_HOME_PATH="$HOME/Ascend/ascend-toolkit/latest"
-export TMPDIR=/dev/shm
-./build.sh
-```
-
-`build.sh` 会依次：
-
-1. 配置 CMake，目标默认为 `Ascend310P3`，C++ 标准为 C++17。
-2. 编译 Triton 后端、共享设备画布池和 Ascend C 预处理内核。
-3. 安装到 `build/install/`，为依赖库设置 `$ORIGIN` RPATH。
-4. 将每个后端 `.so` 复制到对应模型的 `workspace/models/<模型名>/1/` 目录。
-
-常用可选环境变量：
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `ASCEND_HOME_PATH` | `/usr/local/Ascend/ascend-toolkit/latest` | CANN Toolkit 路径 |
-| `SOC_VERSION` | `Ascend310P3` | ATC/Ascend C 目标 SOC |
-| `TRITON_DIR` | `third_party/triton` 或自动探测 | 含 `include/triton/core/tritonbackend.h` 的 Triton 根目录 |
-| `BUILD_DIR` | 仓库内 `build/` | CMake 构建目录 |
-| `TMPDIR` | `/dev/shm` | Ascend C 编译临时目录；空间不足时请指定足够大的文件系统 |
-
-例如使用非默认 Triton 头文件目录：
-
-```bash
-TRITON_DIR=/opt/tritonserver ASCEND_HOME_PATH="$ASCEND_HOME_PATH" ./build.sh
-```
-
-直接运行 `cmake --build` 只会构建，不会安装和部署后端库；常规使用请运行 `./build.sh`。若更新了共享内核库，必须重新运行整个脚本，让所有使用该 SONAME 的模型目录都获得相同版本，然后重启 Triton 进程。
-
-## 准备 Ascend 模型
-
-模型文件不在 Git 中，需从自己的训练/导出流程获得。YOLO11 配置默认读取容器内 `/yolo/yolo11s.om`；YOLO26 AIPP 配置默认读取仓库内 `workspace/models/YOLO26_DET_PRE/1/yolo26s.om`；无 AIPP 变体默认读取 `workspace/models/YOLO26_DET_PRE_RGB/1/yolo26s_noaipp.om`。如文件名或位置不同，修改相应模型配置中的 `model_path`，或使用 YOLO11 对应的 Compose 挂载变量。
-
-### 转换 YOLO26 AIPP 模型
-
-准备动态或较新 opset 的 YOLO26 ONNX 导出，并安装 `onnx`、`onnxsim` Python 包。转换脚本会固定输入形状、在需要时用 `onnxsim` 简化动态形状，并将 ATC 不支持的 opset 降至 17：
-
-```bash
-python3 -m pip install onnx onnxsim
-export ASCEND_HOME_PATH="$HOME/Ascend/ascend-toolkit/latest"
-export TMPDIR=/dev/shm
-scripts/convert_yolo26.sh \
-  workspace/models/YOLO26_DET_PRE/1/yolo26s.onnx yolo26s
-```
-
-默认插入 `workspace/atc/aipp_nv12_640.cfg`，生成 `workspace/models/YOLO26_DET_PRE/1/yolo26s.om`，输入为静态 NV12 + AIPP。输出由 YOLO26 模型提供，格式为 `[1,300,6]`。
-
-### 转换 YOLO26 无 AIPP 模型
-
-```bash
-AIPP_CFG=none scripts/convert_yolo26.sh \
-  workspace/models/YOLO26_DET_PRE_RGB/1/yolo26s.onnx yolo26s_noaipp
-```
-
-将生成的文件放在 `workspace/models/YOLO26_DET_PRE_RGB/1/yolo26s_noaipp.om`。无 AIPP 模型直接接收 FP32、RGB、CHW、范围 `[0,1]` 的输入，应配对 `YOLO_640_LETTERBOX_PREPROCESS_RGB` 和 `YOLO26_DET_PRE_RGB`，不要配 NV12/AIPP ensemble。
-
-YOLO11 `.om` 不由本仓库的转换脚本生成。将已有模型复制到本机路径，并保证 `YOLO11_DET_PRE/config.pbtxt` 中的 `model_path` 与容器内挂载目标一致。
-
-## 配置服务
-
-### 1. 创建并编辑 `.env`
-
-```bash
 cp .env.example .env
 ```
 
-编辑 `.env`，至少设置 Toolkit 路径和 YOLO11 `.om` 的**宿主机绝对路径**：
+已有仓库执行 `git pull --ff-only` 即可；已有 `.env` 时编辑原文件。至少设置：
 
 ```dotenv
-ASCEND_TOOLKIT_ROOT=/home/your-user/Ascend/ascend-toolkit
-YOLO_MODEL_HOST_PATH=/absolute/path/to/yolo11s.om
-YOLO_MODEL_PATH_IN_CONTAINER=/yolo/yolo11s.om
-ASCEND_DEVICE_ID=0
-ASCEND_CANVAS_SLOTS=8
-TRITON_IMAGE=nvcr.io/nvidia/tritonserver:24.10-py3
+TRITON_CANN_IMAGE=triton-ascend-cann:24.10-cann9.0.0
+TRITON_CANN_CONTAINER_NAME=triton-ascend-cann9
+YOLO26_MODEL_HOST_PATH=/实际路径/yolo26s.om
+ASCEND_DEVICE_ID=2
 TRITON_HTTP_PORT=54245
 TRITON_GRPC_PORT=54246
 TRITON_METRICS_PORT=54247
 ```
 
-`.env` 是本机配置并被 `.gitignore` 忽略，不要提交真实机器路径或凭据。默认端口若已被占用，请改左侧宿主机端口，例如 `TRITON_HTTP_PORT=15425`；容器内端口仍为 `8000/8001/8002`。
+`ASCEND_DEVICE_ID` 是 ACL 逻辑设备号。A 当前使用 `1`；B 此前的 NPU 5 / Chip 0 对应逻辑设备 `2`，仍需以最新的 `npu-smi info -m` 和占用为准。`privileged` 使所有设备可见，并不隔离 NPU 资源。
 
-YOLO11 `.om` 必须存在且是文件。Docker 对不存在的 bind mount 源可能创建目录，之后模型会加载失败。启动前检查：
+在同一个 Bash 终端加载配置，确保下面的 curl、文件检查也能使用变量：
 
 ```bash
-test -f "$YOLO_MODEL_HOST_PATH"
+set -a
+source .env
+set +a
+
+test -f "$YOLO26_MODEL_HOST_PATH" && test -s "$YOLO26_MODEL_HOST_PATH"
+test -d /usr/local/Ascend/driver
+test -d /usr/local/Ascend/develop
 test -f /etc/ascend_install.info
-test -d "$ASCEND_TOOLKIT_ROOT"
+npu-smi info -m
 ```
 
-Compose 会挂载整个 Toolkit（`latest` 通常是指向版本目录的符号链接）、Ascend 驱动、`/etc/ascend_install.info`、模型仓库和模型加载清单。此环境使用 `privileged: true` 供 ACL 访问设备；共享内存推理需要 `ipc: host`。如果系统没有 `/etc/ascend_install.info`，需按本机驱动安装情况调整挂载。
+首次创建容器之前确认 OM 是非空文件，避免旧 Docker 把不存在的文件挂载源创建成目录。
 
-### 2. 设置启动时加载的模型
-
-`workspace/models_to_load.txt` 每行一个模型，`#` 开头为注释；`scripts/serve.sh` 用它生成 Triton `--load-model` 参数，并自动追加 `CUSTOM_LABELS`。默认清单包含 YOLO11 和 YOLO26 模型。
-
-在干净环境中启动前，清单中的推理模型必须有对应 `.om`，并且模型配置指向正确路径。若暂时没有 YOLO26 权重，可从清单中注释掉 `YOLO26_DET_PRE`、`YOLO26_DET_PRE_HOST`、`YOLO26_DET_PRE_ENSEMBLE`、`YOLO26_DET_PRE_RGB`、`YOLO26_DET_PRE_RGB_ENSEMBLE` 和 `YOLO26_DET_PRE_YUV_ENSEMBLE`，以及只用于这些链的独立模型；或者先完成相应模型转换。YOLO11 也必须先准备好。
-
-显式模型控制模式下，未列入清单的模型不会在启动时加载，但可通过 Triton 仓库 API 加载。ensemble 的每个依赖模型也必须可用。
-
-## 启动与停止
-
-在仓库根目录执行：
+## 构建与启动
 
 ```bash
-docker compose config       # 展开变量并检查 Compose 配置
-docker compose up -d        # 创建并后台启动 Triton
-docker compose ps           # 查看容器与端口映射
-docker compose logs -f      # 查看启动及模型加载日志，Ctrl-C 退出日志跟随
+docker compose -p triton-cann9 config
+docker compose -p triton-cann9 build triton-ascend
+
+docker compose -p triton-cann9 run --rm --no-deps triton-ascend \
+  python3 /opt/triton-ascend/check-device.py
+
+docker compose -p triton-cann9 up -d --no-deps triton-ascend
+docker compose -p triton-cann9 logs --tail=200 triton-ascend
 ```
 
-服务健康检查和模型状态：
+构建默认使用 ARM64 CANN 9.0.0 / 310P / Ubuntu 22.04 镜像编译，再将 CANN 和产物复制到 Triton 24.10 镜像。构建不需要 NPU 或宿主机 C++、CMake、Toolkit。`CANN_IMAGE` 和 `TRITON_BASE_IMAGE` 可改为相同内容的私有仓库地址；Dockerfile 的 CANN 版本目录固定为 9.0.0。
+
+默认加载 `CUSTOM_LABELS`、`YUV_640_LETTERBOX_PREPROCESS`、`YOLO26_DET_PRE`、`YOLO26_DET_PRE_POSTPROCESS`、`YOLO26_DET_PRE_YUV_ENSEMBLE` 五个模型。模型配置、类别表、加载清单和 `.so` 固化在镜像里，宿主机只挂载单个 OM。
 
 ```bash
-curl -i http://localhost:54245/v2/health/ready
-curl -s -X POST http://localhost:54245/v2/repository/index \
-  -H 'Content-Type: application/json' -d '{}' | python3 -m json.tool
+curl -sS -f -o /dev/null -w 'server HTTP %{http_code}\n' \
+  "http://127.0.0.1:${TRITON_HTTP_PORT}/v2/health/ready"
+curl -sS -f -o /dev/null -w 'model HTTP %{http_code}\n' \
+  "http://127.0.0.1:${TRITON_HTTP_PORT}/v2/models/YOLO26_DET_PRE_YUV_ENSEMBLE/ready"
 ```
 
-健康检查成功时返回 HTTP `200`。仓库索引中的每个模型应为 `READY`；模型未就绪时先查看：
+两项应返回 200；就绪接口的响应正文为空。接着执行真实图片测试，并用 `npu-smi info` 确认进程在预期芯片上。
+
+## 图片测试
+
+在客户端机器安装依赖。Ubuntu 的 Python 3.10 若缺少 `ensurepip`，先安装 `sudo apt-get install python3.10-venv`。
 
 ```bash
-docker compose logs --tail=200 triton-ascend
+python3 -m venv .venv-triton-client && source .venv-triton-client/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-client.txt
+
+python workspace/triton_client/visualize.py \
+  --protocol http --url "127.0.0.1:${TRITON_HTTP_PORT}" \
+  --image /实际路径/test.jpg --output /tmp/yolo26_result.jpg
 ```
 
-显式加载/卸载单个模型：
+客户端默认调用 YOLO26 YUV ensemble，将测试图先转换为 NV12。生产端已有 NV12 时直接提交即可。更详细的 Python API、gRPC 和 SHM 用法见 [客户端说明](workspace/triton_client/README.md)。
 
-```bash
-curl -s -X POST http://localhost:54245/v2/repository/models/YOLO26_DET_PRE_ENSEMBLE/load -d '{}'
-curl -s -X POST http://localhost:54245/v2/repository/models/YOLO26_DET_PRE_ENSEMBLE/unload -d '{}'
-```
+## 输入、输出及可选模型
 
-停止服务但保留容器：
-
-```bash
-docker compose down
-```
-
-修改 `.env`、挂载、环境变量或模型加载清单后，用 `docker compose up -d` 重新创建容器；只替换已挂载的 `.so` 后则需重启 Triton，使动态加载器重新载入库：
-
-```bash
-docker compose restart
-```
-
-## 推理客户端
-
-在客户端环境安装依赖：
-
-```bash
-python3 -m pip install numpy opencv-python 'tritonclient[all]'
-```
-
-HTTP、gRPC 和 SHM 默认端点分别为 `localhost:54245`、`localhost:54246` 和 `localhost:54246`（SHM 使用 gRPC 管理共享内存区域）。端口可由 `.env` 中的 `TRITON_HTTP_PORT`、`TRITON_GRPC_PORT`、`TRITON_METRICS_PORT` 修改。
-
-在 `workspace/` 下运行示例：
-
-```bash
-cd workspace
-python3 triton_client/example.py --protocol http
-python3 triton_client/example.py --protocol grpc --model YOLO26_DET_PRE_ENSEMBLE
-python3 triton_client/example.py --protocol shm --model YOLO26_DET_PRE_ENSEMBLE
-```
-
-命令行选项：
-
-```bash
-python3 triton_client/example.py --help
-python3 triton_client/visualize.py --help
-python3 triton_client/labels.py --help
-python3 triton_client/benchmark.py --help
-```
-
-`visualize.py` 可对多个模型运行检测并把标注图写入 `workspace/detections/`：
-
-```bash
-python3 triton_client/visualize.py --protocol http \
-  --model YOLO11_DET_PRE_ENSEMBLE,YOLO26_DET_PRE_ENSEMBLE
-python3 triton_client/visualize.py --protocol http \
-  --model YOLO26_DET_PRE_YUV_ENSEMBLE
-```
-
-类别表由 `CUSTOM_LABELS` 提供。每个 ensemble 对应 `workspace/models/CUSTOM_LABELS/names/<模型名>.txt`，每行一个类别名，行号就是类别 ID。更新标签文件后重新加载该 Python 模型：
-
-```bash
-curl -s -X POST http://localhost:54245/v2/repository/models/CUSTOM_LABELS/unload -d '{}'
-curl -s -X POST http://localhost:54245/v2/repository/models/CUSTOM_LABELS/load -d '{}'
-```
-
-SHM 模式要求客户端和容器共享 IPC 命名空间；Compose 已配置 `ipc: host`。HTTP/gRPC 不依赖此设置。`NV12_REF` 是模型间传递的设备地址句柄，不是供客户端保存或重复提交的图像张量；普通客户端应调用 ensemble，或请求 `NV12` 主机张量。
-
-## NV12/YUV 输入
-
-`YOLO26_DET_PRE_YUV_ENSEMBLE` 接收打包 NV12：`UINT8 [rows, width, 1]`，其中 `rows = 图像高度 × 3/2`、宽度和图像高度均为偶数。布局是先完整 Y 平面，再接交错的 UV 平面（NV12）。例如 1568×1068 输入的张量形状为 `(1602, 1568, 1)`。
-
-该路径直接缩放亮度和色度平面，不做 YUV↔RGB 颜色转换，然后输出与 BGR 预处理相同的 NV12 画布和变换元数据。摄像头或 DVPP 已经输出 NV12 时，可直接发送该帧；不要先转换为 BGR。
-
-YUV 预处理与完整 ensemble 的基准：
-
-```bash
-cd workspace
-python3 triton_client/benchmark.py --runs 30 --protocol http
-python3 triton_client/benchmark.py --runs 30 --protocol grpc
-```
-
-该脚本使用同一张测试图生成对应 NV12，并比较 BGR 与 YUV 链路，也分别测预处理、回传画布和传输估算。实测结果会受设备负载、网络和图像大小影响；README 中的测量值仅作参考。
-
-## 输出和变换元数据
-
-后处理输出：
-
-| 输出 | 内容 |
+| 接口 | 内容 |
 | --- | --- |
-| `NUM_DETS` | 有效检测数 |
-| `DETECTION_BOXES` | `x1,y1,x2,y2`，通常映射回源图像像素坐标 |
+| `YUV` | `UINT8 [H*3/2,W,1]`，先 Y 平面、后交错 UV 的 NV12；宽高必须为偶数，无 batch 维 |
+| `NUM_DETS` | 有效检测数量 |
+| `DETECTION_BOXES` | 原图像素坐标 `x1,y1,x2,y2` |
 | `DETECTION_SCORES` | 检测分数 |
-| `DETECTION_CLASSES` | 类别索引 |
+| `DETECTION_CLASSES` | 类别 ID；名称由 `CUSTOM_LABELS` 返回 |
 
-预处理返回的 `TRANSFORM_METADATA` 为 6 个 FP32：`[scale_x, scale_y, pad_left, pad_top, source_width, source_height]`。后处理用它把 640×640 画布中的框映射回输入图像坐标。单独调用后处理而不提供 metadata 时，框保持在画布坐标中。
+预处理和推理在同一 NPU 上通过 `NV12_REF` 传递设备画布，避免画布回传主机。该句柄只能在同一请求链中使用。后处理利用 `[scale_x,scale_y,pad_left,pad_top,source_width,source_height]` 还原坐标。
 
-YOLO11 原始推理张量为 `PREDICTIONS FP32 [1,84,8400]`：前 4 个通道是 `cx,cy,w,h`，其余 80 个是 COCO 类别分数；YOLO11 后处理负责解码和 NMS。YOLO26 输出 `[1,300,6]` 检测行，后处理只负责阈值过滤和坐标还原。
+保留以下可选模型及其源码，默认不加载：
 
-## 配置项
+| 模型 | 输入与用途 |
+| --- | --- |
+| `YOLO11_DET_PRE_ENSEMBLE` | BGR；YOLO11 检测 |
+| `YOLO26_DET_PRE_ENSEMBLE` | BGR；YOLO26 AIPP 检测 |
+| `YOLO26_DET_PRE_RGB_ENSEMBLE` | BGR；无 AIPP 的 RGB_CHW 推理 |
+| `YOLO11_DET_PRE_HOST` / `YOLO26_DET_PRE_HOST` | 已 letterbox 的主机 NV12 画布 |
 
-所有后端参数都在对应模型 `config.pbtxt` 的 `parameters` 中配置。Triton 的 `ModelParameter` 使用字符串值，数字和布尔值也必须写成带引号的字符串。
+启用可选链路需提供对应 OM、调整模型配置和加载清单，并在 Compose 增加单个 OM 挂载，然后重建镜像。YOLO11 默认模型路径为 `/yolo/yolo11s.om`，RGB 模型为 `/models/YOLO26_DET_PRE_RGB/1/yolo26s_noaipp.om`。`benchmark.py` 会比较 BGR/YUV 链路，需先启用 BGR 预处理和 ensemble。
 
-常用参数：
-
-| 参数 | 默认值 | 作用 |
-| --- | --- | --- |
-| 预处理 `target_height`、`target_width` | `640`、`640` | 输出画布尺寸 |
-| 预处理 `pad_luma`、`pad_chroma` | `114`、`128` | NV12 letterbox 边界的 Y、UV 值 |
-| 预处理 `kernel_blocks` | `8` | Ascend C 内核 block 数 |
-| 预处理 `even_align` | `true` | 将 paste 偏移对齐到偶数，满足 NV12 采样 |
-| 推理 `model_path` | 各模型配置指定 | `.om` 文件路径；配置项优先于环境变量 |
-| 推理 `device_id` | `ASCEND_DEVICE_ID`，默认 `0` | NPU 设备编号 |
-| YOLO26 `input_format` | `nv12` | `nv12` 或 `rgb_chw`，必须与模型输入匹配 |
-| YOLO11 `confidence_threshold` | `0.25` | 置信度阈值 |
-| YOLO11 `iou_threshold` | `0.45` | NMS IoU 阈值 |
-| 两代后处理 `max_detections` | `300` | 最大输出检测数 |
-
-常用环境变量：
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `YOLO_MODEL_PATH` | 无 | YOLO11 模型配置未设置 `model_path` 时的回退路径 |
-| `YOLO26_MODEL_PATH` | 无 | YOLO26 模型配置未设置 `model_path` 时的回退路径 |
-| `ASCEND_DEVICE_ID` | `0` | NPU 设备编号回退值 |
-| `ASCEND_CANVAS_SLOTS` | `8` | 并发推理可用的设备画布数量 |
-
-通常修改模型配置后 Triton 会按其模型控制方式加载新配置，不需要重新编译。修改 C++/Ascend C 源码则需要重新运行 `./build.sh` 并重启服务。
-
-## 重要实现说明
-
-- BGR 预处理执行 letterbox、BT.601 limited-range BGR→YUV 转换并生成 NV12。
-- YUV 预处理对 NV12 的 Y/UV 平面直接重采样，不执行颜色转换；UV 在半分辨率空间采样。
-- RGB 预处理输出 FP32、RGB、CHW、`[0,1]` 张量，供无 AIPP 模型使用。
-- Ensemble 在 NPU 上通过 `NV12_REF` 传递设备画布，避免把 614400 字节画布复制到主机再传回设备。句柄只应在同一 Triton 请求链内传递。
-- ACL 初始化是进程级状态；后端允许重复初始化返回值，不调用 `aclFinalize`，避免一个后端影响同进程中的其他后端。
-- `src/preprocess/CMakeLists.txt` 集中声明 Ascend C 内核库，因为 `ascendc.cmake` 在同一 CMake 项目中只能包含一次。
-- `libyolo_preprocess_kernel.so` 有固定 SONAME。所有加载此库的模型版本目录必须部署同一构建版本；`build.sh` 会一并更新相关目录。
-- 预处理内核以 128 字节输出块分块，将源行暂存到 UB，避免逐元素读取 GM；横向映射表减少重复浮点除法，块内部再拆成左边界/图像/右边界三段。
-- 各后端按 Triton 的实例 stream 执行 ACL/Ascend C 工作，并在数据跨步骤读取前同步。
-
-## 常见问题
-
-### `CANN toolkit not found` 或找不到 `kernel_operator.h`
-
-`ASCEND_HOME_PATH` 必须指向有 `include/acl/acl.h` 和 Ascend C 工具的 Toolkit 目录。确认路径正确后重新编译：
+若需转换 YOLO26 ONNX，使用 CANN 容器中的 ATC：
 
 ```bash
-ASCEND_HOME_PATH="$HOME/Ascend/ascend-toolkit/latest" TMPDIR=/dev/shm ./build.sh
+docker run --rm -v "$PWD:/project" -w /project --entrypoint /bin/bash "$CANN_IMAGE" -lc \
+  'source docker/cann-env.sh && python3 -m pip install onnx onnxsim && bash scripts/convert_yolo26.sh workspace/models/YOLO26_DET_PRE/1/yolo26s.onnx yolo26s'
 ```
 
-### 找不到 `tritonbackend.h`
+无 AIPP 模型可给转换脚本设置 `AIPP_CFG=none`，并使用 RGB 对应路径及 ensemble。转换模型后仍需实际推理验证。
 
-检查 `third_party/triton/include/triton/core/tritonbackend.h` 是否存在；不存在时运行 `scripts/fetch-triton-headers.sh`，或设置 `TRITON_DIR` 指向 Triton 安装根目录。
+## 更新与排查
 
-### 模型不是 READY
+- 修改 C++、Ascend C、模型配置、类别表或加载清单：先 `docker compose -p triton-cann9 build triton-ascend`，再 `docker compose -p triton-cann9 up -d --no-deps --force-recreate triton-ascend`。不要挂载宿主机 `.so` 覆盖镜像。
+- 修改 `.env` 或替换 OM：重新创建容器，无需重新编译后端。所有命令保持相同 Compose 项目名，A 现有测试项目名为 `triton-cann-a-test`。
+- CANN 初始化报 `507033`：检查 `docker/cann-env.sh` 的真实 driver HAL 优先级，不能让 `develop/lib64` 中的 HAL 覆盖真实驱动。
+- `ldd` 缺库：用 `docker compose -p triton-cann9 run --rm --no-deps triton-ascend ldd /models/YOLO26_DET_PRE/1/libtriton_yolo26_infer.so` 检查。
+- CUDA / NVML / DCGM 初始化消息没有阻止 A 的实际 NV12 推理；换主机后仍以真实推理为准。
+- 新 Compose 提示 `version` 过时是兼容 B 的旧 Compose 1.22 所致，保留格式 `2.4`。
+- `CUSTOM_LABELS/names` 是类别表目录，不是模型版本目录，被 Triton 跳过版本扫描属于预期行为。
 
-检查 `.om` 文件是否存在、模型配置的 `model_path` 是否为**容器内路径**、`.env` 的宿主机 bind mount 是否有效，以及 `workspace/models_to_load.txt` 中的 ensemble 依赖是否都加载。用 `docker compose logs --tail=200` 查看 Triton 报错。
-
-### `undefined symbol` 或加载到旧内核
-
-不要只覆盖一个模型目录里的 `.so`。运行 `./build.sh` 更新所有部署位置，再执行 `docker compose restart`。同 SONAME 的库在进程中只加载一份，首个加载副本会决定实现版本。
-
-### `address already in use`
-
-修改 `.env` 的宿主机端口（例如将 `TRITON_HTTP_PORT` 改成 `15425`），再运行 `docker compose up -d`；容器内端口映射无需改动。
-
-### `CUSTOM_LABELS` 缺少类别表
-
-检查 `workspace/models/CUSTOM_LABELS/names/<ensemble 名>.txt` 是否存在，每行一个类别名。修改后 unload/load `CUSTOM_LABELS` 模型即可重新读取文件。
-
-### SHM 报共享内存区域不可见
-
-确认 `docker-compose.yml` 保留 `ipc: host`，并确认 Docker 和客户端位于同一台 Linux 主机。HTTP 或 gRPC 可用于排除 SHM 配置问题。
-
-## 验证记录
-
-项目在 Ascend 310P3、CANN 8.2 和 Triton 24.10 容器环境验证。示例图 `persons.jpg` 上，四条检测链分别产生 YOLO11 29 个、YOLO26 AIPP 28 个、YOLO26 RGB 27 个、YOLO26 YUV 30 个检测。BGR 与 YUV 路径采样方式不同，因此分数阈值附近的检测数可能不同；letterbox 边界和几何映射保持一致。
-
-优化后的示例性能（20 次请求中位数，具体取决于设备负载和网络）：
-
-| 路径 | 端到端耗时 | 预处理单独耗时 |
-| --- | ---: | ---: |
-| YOLO26 BGR/AIPP | 约 25.3 ms | 约 20.0 ms |
-| YOLO26 NV12/YUV | 约 13.7 ms | 约 8.1 ms |
-
-改动前后针对 1568×1068、640×480、333×200、334×200 等几何测试了预处理结果；优化版本与基线逐字节一致。NV12 输入的宽、高必须是偶数。
+本地部署回归检查：`python3 -m unittest discover -s tests -v`，依赖 PyYAML、Bash、CMake；这些检查不能代替目标机器上的设备和模型推理验证。

@@ -152,7 +152,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--protocol", default="grpc", choices=["http", "grpc", "shm"])
-    parser.add_argument("--model", default="YOLO11_DET_PRE_ENSEMBLE",
+    parser.add_argument("--model", default=yolo.DEFAULT_MODEL,
                         help="one model, or several separated by commas")
     parser.add_argument("--image", default=yolo.DEFAULT_IMAGE)
     parser.add_argument("--output", default=None,

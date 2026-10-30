@@ -1,12 +1,9 @@
 #!/bin/bash
-# Builds the Triton Ascend YOLO backends and deploys each library into the model
-# that uses it.
-#
-# Usage:
-#   ASCEND_HOME_PATH=/path/to/Ascend/ascend-toolkit/latest ./build.sh
+# Dockerfile 构建阶段内部调用：编译后端并部署到各模型的版本目录。
+# 日常部署使用 docker compose build，无需在宿主机安装或查找 CANN。
 #
 # Optional environment:
-#   ASCEND_HOME_PATH   CANN toolkit prefix (default: /usr/local/Ascend/ascend-toolkit/latest)
+#   ASCEND_HOME_PATH   镜像内 CANN 目录（由 docker/cann-env.sh 设置）
 #   TRITON_DIR         Triton installation holding include/triton/core/tritonbackend.h
 #                      (default: third_party/triton, populated by
 #                      scripts/fetch-triton-headers.sh)
@@ -19,7 +16,7 @@ SCRIPT_DIR=$(cd "$(dirname "$(realpath "$0")")" && pwd)
 BUILD_DIR="${BUILD_DIR:-${SCRIPT_DIR}/build}"
 MODELS_DIR="${SCRIPT_DIR}/workspace/models"
 
-ASCEND_HOME_PATH="${ASCEND_HOME_PATH:-/usr/local/Ascend/ascend-toolkit/latest}"
+ASCEND_HOME_PATH="${ASCEND_HOME_PATH:-/usr/local/Ascend/cann-9.0.0}"
 SOC_VERSION="${SOC_VERSION:-Ascend310P3}"
 
 HOST_ARCH=$(uname -m)
@@ -39,19 +36,8 @@ if [ -z "${ACL_INCLUDE_DIR}" ]; then
 fi
 echo "[build.sh] ACL include: ${ACL_INCLUDE_DIR}"
 
-# Prefer the bundled headers, but fall back to a Triton installation if present.
-if [ -z "${TRITON_DIR}" ]; then
-    if [ -f "${SCRIPT_DIR}/third_party/triton/include/triton/core/tritonbackend.h" ]; then
-        TRITON_DIR="${SCRIPT_DIR}/third_party/triton"
-    else
-        for candidate in /opt/tritonserver /usr /usr/local; do
-            if [ -f "${candidate}/include/triton/core/tritonbackend.h" ]; then
-                TRITON_DIR="${candidate}"
-                break
-            fi
-        done
-    fi
-fi
+# 使用随仓库提供的头文件，不自动搜索宿主机 Triton 安装。
+TRITON_DIR="${TRITON_DIR:-${SCRIPT_DIR}/third_party/triton}"
 
 if [ ! -f "${TRITON_DIR}/include/triton/core/tritonbackend.h" ]; then
     echo "[build.sh] ERROR: tritonbackend.h not found under ${TRITON_DIR}" >&2
@@ -66,7 +52,7 @@ fi
 
 # The Ascend C compiler stages temporary files in TMPDIR; keep it on a
 # filesystem with room to spare when /tmp is small.
-export TMPDIR="${TMPDIR:-/dev/shm}"
+export TMPDIR="${TMPDIR:-/tmp}"
 
 echo "[build.sh] CANN:       ${ASCEND_HOME_PATH}"
 echo "[build.sh] Triton:     ${TRITON_DIR}"

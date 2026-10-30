@@ -18,7 +18,9 @@ import numpy as np
 
 from . import coco
 
-DEFAULT_IMAGE = "/home/HwHiAiUser/project/ascend-sam3/workspace/persons.jpg"
+# 测试图片由命令行或环境变量指定，避免依赖某台服务器的个人目录。
+DEFAULT_IMAGE = os.environ.get("TRITON_TEST_IMAGE", "")
+DEFAULT_MODEL = "YOLO26_DET_PRE_YUV_ENSEMBLE"
 
 OUTPUTS = ["NUM_DETS", "DETECTION_BOXES", "DETECTION_SCORES", "DETECTION_CLASSES"]
 
@@ -186,6 +188,8 @@ def split_models(value):
 
 
 def resolve_image(path):
+    if not path:
+        raise SystemExit("provide --image PATH or set TRITON_TEST_IMAGE")
     if not os.path.exists(path):
         raise SystemExit("no such image: %s" % path)
     return path

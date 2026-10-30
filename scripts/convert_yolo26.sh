@@ -2,7 +2,7 @@
 # Converts a YOLO26 ONNX export into the Ascend `.om` that `yolo26_infer` loads.
 #
 # Usage:
-#   scripts/convert_yolo26.sh <model.onnx> [output_name]
+#   在 CANN 容器内运行 scripts/convert_yolo26.sh <model.onnx> [output_name]
 #
 # Environment:
 #   AIPP_CFG=<path>   static AIPP to insert (default workspace/atc/aipp_nv12_640.cfg),
@@ -49,7 +49,7 @@ else
     echo "[convert] inserting static AIPP from ${AIPP_CFG}"
 fi
 
-ASCEND_HOME_PATH="${ASCEND_HOME_PATH:-/usr/local/Ascend/ascend-toolkit/latest}"
+source "${ROOT_DIR}/docker/cann-env.sh"
 SOC_VERSION="${SOC_VERSION:-Ascend310P3}"
 TRITON_INPUT_SHAPE="${TRITON_INPUT_SHAPE:-images:1,3,640,640}"
 INPUT_NAME="${TRITON_INPUT_SHAPE%%:*}"
@@ -61,7 +61,7 @@ INPUT_NAME="${TRITON_INPUT_SHAPE%%:*}"
 }
 
 # The Ascend C compiler and ATC stage temporary files in TMPDIR.
-export TMPDIR="${TMPDIR:-/dev/shm}"
+export TMPDIR="${TMPDIR:-/tmp}"
 export PATH="${ASCEND_HOME_PATH}/compiler/bin:${ASCEND_HOME_PATH}/bin:${PATH}"
 
 NORMALISED="${OUTPUT_DIR}/${NAME}_atc.onnx"

@@ -1,49 +1,6 @@
-# Models Triton loads at startup, one per line. `#` starts a comment.
-#
-# Passed to Triton as repeated --load-model flags by scripts/serve.sh, which
-# runs the server in explicit model-control mode. Listing a model here is what
-# makes it load; everything else in the repository stays unloaded until a client
-# asks for it through the model repository API.
-#
-# Ensembles require their steps to be loaded too, so list the whole chain.
-
-# The label service, which maps class ids to names for the models below. It is a
-# Python backend model: no `.om`, no device. scripts/serve.sh appends it when it
-# is missing, so it is listed here only for visibility.
+# 默认仅加载 AIDetection 使用的 YOLO26 NV12 链路，依赖模型也必须列出。
 CUSTOM_LABELS
-
-YOLO_640_LETTERBOX_PREPROCESS
-
-# Letterbox for a model converted *without* AIPP: same geometry, but it emits
-# the FP32 RGB tensor such a model reads instead of an NV12 canvas. Load it when
-# you serve a no-AIPP chain.
-YOLO_640_LETTERBOX_PREPROCESS_RGB
-
-# Letterbox for a caller that already holds NV12: no colour conversion anywhere.
-# Same output contract, so YOLO26_DET_PRE and the postprocess step work with it.
 YUV_640_LETTERBOX_PREPROCESS
-
-YOLO11_DET_PRE
-YOLO11_DET_PRE_HOST
-YOLO11_DET_PRE_POSTPROCESS
-YOLO11_DET_PRE_ENSEMBLE
-
-# The host-tensor variant is only needed by callers that already hold an NV12
-# canvas, but it is also what proves the device path carries identical data.
-
-# YOLO26: `yolo26s.om` is converted with workspace/atc/aipp_nv12_640.cfg and
-# sits in YOLO26_DET_PRE/1, which is where the model config points.
 YOLO26_DET_PRE
-# Same model behind a host NV12 input, for a caller that already holds a
-# letterboxed YUV canvas (a camera or DVPP pipeline).
-YOLO26_DET_PRE_HOST
 YOLO26_DET_PRE_POSTPROCESS
-YOLO26_DET_PRE_ENSEMBLE
-
-# The same pipeline for a model converted without AIPP: the RGB preprocess and
-# inference models in place of the NV12 ones. The postprocess step is shared.
-YOLO26_DET_PRE_RGB
-YOLO26_DET_PRE_RGB_ENSEMBLE
-
-# The same pipeline fed from a YUV source instead of a decoded BGR frame.
 YOLO26_DET_PRE_YUV_ENSEMBLE

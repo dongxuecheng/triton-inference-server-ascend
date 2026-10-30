@@ -13,6 +13,7 @@ workspace/detections/
 .env.cann
 .env.cann.a
 .env.cann.b
+.venv*/
 *.docker.tar
 
 # Deployment copies of the backend libraries. They are produced by build.sh

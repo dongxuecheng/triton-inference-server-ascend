@@ -20,11 +20,11 @@ CMAKE = os.environ.get("TEST_CMAKE") or shutil.which("cmake")
 
 class DeploymentConfigTests(unittest.TestCase):
     def test_compose_uses_legacy_schema_and_no_host_toolkit(self):
-        config = yaml.safe_load((ROOT / "docker-compose.cann.yml").read_text(encoding="utf-8"))
+        config = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
         self.assertEqual(config["version"], "2.4")
         service = config["services"]["triton-ascend"]
         self.assertEqual(service["environment"]["ASCEND_DEVICE_ID"], "${ASCEND_DEVICE_ID:-2}")
-        self.assertEqual(service["build"]["dockerfile"], "Dockerfile.cann")
+        self.assertEqual(service["build"]["dockerfile"], "Dockerfile")
         for volume in service["volumes"]:
             self.assertIsInstance(volume, str)
             self.assertNotIn("TOOLKIT", volume)
@@ -32,7 +32,7 @@ class DeploymentConfigTests(unittest.TestCase):
             self.assertNotIn(":/models:", volume)
 
     def test_selected_chain_is_complete_and_no_model_pins_device_zero(self):
-        models = [line.strip() for line in (ROOT / "workspace/models_to_load.container.txt").read_text(encoding="utf-8").splitlines()
+        models = [line.strip() for line in (ROOT / "workspace/models_to_load.txt").read_text(encoding="utf-8").splitlines()
                   if line.strip() and not line.startswith("#")]
         self.assertEqual(set(models), {"CUSTOM_LABELS", "YUV_640_LETTERBOX_PREPROCESS", "YOLO26_DET_PRE",
                                       "YOLO26_DET_PRE_POSTPROCESS", "YOLO26_DET_PRE_YUV_ENSEMBLE"})
@@ -59,7 +59,7 @@ class EntrypointTests(unittest.TestCase):
                               env=dict(self.env, **env), capture_output=True, text=True)
 
     def test_scripts_have_valid_bash_syntax(self):
-        for path in [ROOT / "build.sh", ROOT / "scripts/serve.sh", *ROOT.glob("docker/*.sh")]:
+        for path in [ROOT / "build.sh", *ROOT.glob("scripts/*.sh"), *ROOT.glob("docker/*.sh")]:
             result = subprocess.run([BASH, "-n", str(path)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 

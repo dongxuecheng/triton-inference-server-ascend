@@ -1,156 +1,54 @@
-# Triton Client Wrapper
+# Triton Python 客户端
 
-A concise Python wrapper around the official Triton client SDK that exposes the
-same `infer()` API for HTTP, gRPC and system shared memory (SHM) inference.
+封装 HTTP、gRPC、系统共享内存（SHM），默认检测模型为 `YOLO26_DET_PRE_YUV_ENSEMBLE`。服务部署见 [项目 README](../../README.md)。
 
-## Installation
+## 安装与图片测试
+
+在仓库根目录执行。Ubuntu Python 3.10 缺少 `ensurepip` 时，先执行 `sudo apt-get install python3.10-venv`。
 
 ```bash
-pip install tritonclient[all] numpy
+python3 -m venv .venv-triton-client && source .venv-triton-client/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-client.txt
+
+python workspace/triton_client/visualize.py --protocol http \
+  --url localhost:54245 --image /实际路径/test.jpg --output /tmp/result.jpg
+python workspace/triton_client/example.py --protocol grpc \
+  --url localhost:54246 --image /实际路径/test.jpg
+python workspace/triton_client/labels.py --protocol http --url localhost:54245 --count
 ```
 
-## Usage
+当前封装会同时导入 HTTP 和 gRPC 客户端，因此两组依赖都需要。SHM 是系统共享内存，无需安装 CUDA 客户端依赖。`visualize.py` 的 `--conf` 仅过滤绘图结果，不修改服务端检测阈值。
+
+图片路径通过 `--image` 或 `TRITON_TEST_IMAGE` 环境变量提供。图片测试先将 BGR 转为 NV12；生产端若已有 NV12，可以直接发送 `YUV` 张量，跳过这次转换。
+
+## Python 调用
+
+将仓库 `workspace/` 加入 `PYTHONPATH` 后：
 
 ```python
 import numpy as np
 from triton_client import TritonClient
 
-inputs = {"raw_image": np.random.randint(0, 256, (1, 640, 640, 3), dtype=np.uint8)}
-outputs = ["num_dets", "detection_boxes", "detection_scores", "detection_classes"]
-
-# gRPC
-with TritonClient("localhost:8001", protocol="grpc") as client:
-    result = client.infer("yolo", inputs, outputs)
-
-# HTTP
-with TritonClient("localhost:8000", protocol="http") as client:
-    result = client.infer("yolo", inputs, outputs)
-
-# Shared memory: output_specs describes every requested output tensor.
-output_specs = {
-    "num_dets": ([1, 1], "INT32"),
-    "detection_boxes": ([1, 300, 4], "FP32"),
-    "detection_scores": ([1, 300], "FP32"),
-    "detection_classes": ([1, 300], "INT32"),
-}
-with TritonClient("localhost:8001", protocol="shm") as client:
-    result = client.infer("yolo", inputs, outputs, output_specs=output_specs)
+# packed_nv12 来自实际 NV12 帧，形状为 [H*3/2,W,1]，H/W 为偶数。
+inputs = {"YUV": np.ascontiguousarray(packed_nv12, dtype=np.uint8)}
+outputs = ["NUM_DETS", "DETECTION_BOXES", "DETECTION_SCORES", "DETECTION_CLASSES"]
+with TritonClient("localhost:54245", protocol="http") as client:
+    result = client.infer("YOLO26_DET_PRE_YUV_ENSEMBLE", inputs, outputs)
+count = int(result["NUM_DETS"][0])
+boxes = result["DETECTION_BOXES"][:count]
 ```
 
-## API
+gRPC 使用 `protocol="grpc"` 和端口 `54246`；可通过 `--url` 或构造函数指定其他地址。
 
-### `TritonClient(url, *, protocol="grpc", **kwargs)`
+SHM 使用 `protocol="shm"` 和 gRPC 端口，同次调用额外传 `output_specs`；可复用 `triton_client.yolo.SHM_OUTPUT_SPECS`。客户端与服务必须在同一主机、共享 IPC 命名空间，Compose 已设置 `ipc: host`。用 `control_protocol="http"` 可切换 SHM 管理接口为 HTTP。
 
-Factory that returns one of:
+## API 与其他工具
 
-- `TritonHttpClient`
-- `TritonGrpcClient`
-- `TritonSharedMemoryClient`
+- `TritonClient(url, protocol="grpc", **kwargs)`：按协议创建客户端，支持 `with` 关闭连接。
+- `infer(model_name, inputs, outputs, model_version="", output_specs=None)`：返回输出名到 NumPy 数组的字典；SHM 要预先声明输出缓冲区形状和类型。
+- `labels.py`：查询 `CUSTOM_LABELS`；默认读取 `workspace/models_to_load.txt` 中的 ensemble。类别表位于服务端 `CUSTOM_LABELS/names/<模型名>.txt`。
+- `visualize.py --model A,B`：分别生成多个模型的检测结果及对比图；使用前需在服务端启用相应模型。
+- `benchmark.py`：比较 BGR 与 NV12 链路，需额外启用 BGR 预处理和 `YOLO26_DET_PRE_ENSEMBLE`；默认五模型配置仅提供 NV12 链路。
 
-All clients support the context-manager protocol.
-
-### `infer(model_name, inputs, outputs, *, model_version="", output_specs=None, **kwargs)`
-
-Run inference and return a dict mapping output names to `np.ndarray`.
-
-- `inputs`: `dict[str, np.ndarray]`
-- `outputs`: `list[str]`
-- `output_specs`: required for SHM, `dict[str, (shape, dtype)]` where `dtype`
-  is a Triton datatype string such as `"FP32"`, `"INT32"`, `"UINT8"`, etc.
-
-### Shared memory control protocol
-
-`TritonSharedMemoryClient` uses gRPC by default to register/unregister SHM
-regions with the server. Pass `control_protocol="http"` to switch the control
-channel to HTTP:
-
-```python
-with TritonClient(
-    "localhost:8000", protocol="shm", control_protocol="http"
-) as client:
-    result = client.infer(...)
-```
-
-## Notes
-
-- The wrapper only deals with the Triton client itself. Thread pools,
-  client pools and stream orchestration belong in the application layer.
-- SHM regions are cached inside each `TritonSharedMemoryClient` instance and
-  reused across requests with the same tensor name. They are released when
-  the client is closed.
-
----
-
-## Using this client with this project
-
-The wrapper is used unchanged; only the tensor names and endpoints differ from
-the example above, because the models here name the ensemble input `IMAGE`,
-return upper-case detection tensors, and run with `max_batch_size: 0` (so the
-image goes in as `[height, width, 3]`, without a batch dimension).
-
-| | value |
-| --- | --- |
-| HTTP endpoint | `localhost:54245` |
-| gRPC endpoint | `localhost:54246` |
-| ensemble models | `YOLO11_DET_PRE_ENSEMBLE`, `YOLO26_DET_PRE_ENSEMBLE` |
-| input | `IMAGE` `UINT8 [height, width, 3]` BGR |
-| outputs | `NUM_DETS`, `DETECTION_BOXES`, `DETECTION_SCORES`, `DETECTION_CLASSES` |
-
-`example.py` in this directory is the adapter:
-
-```bash
-python3 example.py --protocol grpc          # YOLO11 by default
-python3 example.py --protocol http  --model YOLO26_DET_PRE_ENSEMBLE
-python3 example.py --protocol shm
-```
-
-`DETECTION_BOXES`, `DETECTION_SCORES` and `DETECTION_CLASSES` have a variable
-length, so they declare a maximum and `NUM_DETS` says how many entries are real.
-For SHM, `example.py` therefore passes `output_specs` sized to the postprocess
-cap (`max_detections`, 300 by default) and slices with `NUM_DETS`.
-
-`visualize.py` runs the same call and draws the result onto the image. Pass
-several models to get each one separately plus a side-by-side comparison:
-
-```bash
-python3 visualize.py                                  # works out of the box
-python3 visualize.py --protocol shm --conf 0.5        # fewer, more certain boxes
-python3 visualize.py --model YOLO11_DET_PRE_ENSEMBLE,YOLO26_DET_PRE_ENSEMBLE
-python3 visualize.py --image other.jpg --output-dir /tmp
-```
-
-It writes `<image>_<model>.jpg` to `workspace/detections/` by default, drawing
-boxes for every detection at or above `--conf` and labelling them best score
-first, skipping a label when it would cover one already placed. `--conf` only
-controls what is drawn: the threshold the models apply is their
-`confidence_threshold` parameter, so lowering it here cannot reveal detections
-the backend dropped.
-
-`labels.py` asks the `CUSTOM_LABELS` model what a class id means, so a
-custom-trained model needs no client change:
-
-```bash
-python3 labels.py                        # every ensemble in models_to_load.txt
-python3 labels.py YOLO26_DET_PRE_ENSEMBLE
-python3 labels.py --grep person
-python3 labels.py --count
-```
-
-`CUSTOM_LABELS` is a Python backend model, not one of the compiled Ascend ones:
-it reads `workspace/models/CUSTOM_LABELS/names/<model>.txt` at load time (one
-name per line, line order is class id order) and returns the list as a string
-tensor. Only the ensembles have a file, because a chain's steps expose the same
-classes and are looked up through the ensemble name. `labels.py` prints the id
-next to each name, since that id is what `DETECTION_CLASSES` carries. Only HTTP
-and gRPC work for it: the output length varies and shared memory needs every
-buffer sized before the call.
-
-The three scripts share `coco.py` (class names and colours) and `yolo.py`
-(tensor names, ports, `detect()`, `get_labels()`). `coco.py` keeps a built-in
-COCO table as the fallback for when the service is not loaded.
-
-**SHM needs `ipc: host`.** System shared memory is a host resource, so the
-client's `/dev/shm` segment is invisible to a server running in a container with
-a private IPC namespace, and inference fails with `Unable to open shared memory
-region`. `docker-compose.yml` sets `ipc: host` for this reason. HTTP and gRPC do
-not need it.
+YOLO11、YOLO26 BGR 和 RGB 路径仍可通过 `--model` 指定，但需要相应服务端模型和权重。各工具可用 `--help` 查看参数。

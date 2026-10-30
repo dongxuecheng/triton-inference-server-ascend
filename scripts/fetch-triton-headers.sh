@@ -7,12 +7,12 @@
 #   scripts/fetch-triton-headers.sh [output-include-dir]
 #
 # Environment:
-#   TRITON_IMAGE  Triton image to extract from
+#   TRITON_BASE_IMAGE  Triton image to extract from
 #                 (default: nvcr.io/nvidia/tritonserver:24.10-py3)
 #
 set -euo pipefail
 
-IMAGE="${TRITON_IMAGE:-nvcr.io/nvidia/tritonserver:24.10-py3}"
+IMAGE="${TRITON_BASE_IMAGE:-nvcr.io/nvidia/tritonserver:24.10-py3}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="${1:-${REPO_ROOT}/third_party/triton/include}"
 

@@ -37,6 +37,6 @@ ENV ASCEND_HOME_PATH=/usr/local/Ascend/cann-9.0.0 \
 COPY --from=builder /opt/triton-ascend-src/workspace/models /models
 COPY scripts/serve.sh /opt/triton-ascend/serve.sh
 COPY docker /opt/triton-ascend
-COPY workspace/models_to_load.container.txt /models_to_load.txt
+COPY workspace/models_to_load.txt /models_to_load.txt
 EXPOSE 8000 8001 8002
 ENTRYPOINT ["/bin/bash", "/opt/triton-ascend/entrypoint.sh"]

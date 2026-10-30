@@ -1,0 +1,4 @@
+# 仅供图片测试、HTTP/gRPC/系统共享内存客户端使用。
+tritonclient[http,grpc]==2.51.0
+numpy
+opencv-python-headless
