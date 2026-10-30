@@ -1,5 +1,39 @@
 # A 验证通过后迁移到 B（麒麟）
 
+## HAL 库优先级修复后，在 A 重新测试
+
+A 的对照日志已经确认：`ASCEND_DEVICE_ID=1` 在真实驱动 HAL 下可以初始化；
+此前 507033 来自启动脚本误优先加载 `develop/lib64/libascend_hal.so`。
+修复后的库路径顺序为 `driver/lib64/driver`、`driver/lib64/common`、`driver/lib64`、
+CANN 库，再保留已有环境路径。不再主动加入 `develop/lib64`，但保留现有挂载。
+
+A 使用新版 `docker compose`。已有 `.env.cann.a` 时无需重新复制；确认其中
+`ASCEND_DEVICE_ID=1`、OM 绝对路径和测试端口正确。在同一个 Bash 终端执行：
+
+```bash
+git pull --ff-only
+set -a
+source .env.cann.a
+set +a
+
+dc() { docker compose -p triton-cann-a-test -f docker-compose.cann.yml "$@"; }
+echo "$ASCEND_DEVICE_ID"
+dc build triton-ascend
+dc run --rm --no-deps triton-ascend python3 /opt/triton-ascend/check-device.py
+```
+
+这次不要再手动覆盖 `LD_LIBRARY_PATH`。应输出 `ACL OK: visible_count=2, logical_device=1`。
+预检通过后再启动，下面的重建只针对独立测试项目：
+
+```bash
+dc up -d --no-deps --force-recreate triton-ascend
+dc logs --tail=200 triton-ascend
+curl -f "http://127.0.0.1:${TRITON_HTTP_PORT}/v2/models/YOLO26_DET_PRE_YUV_ENSEMBLE/ready"
+```
+
+脚本固化在镜像内，只有 `git pull` 或 `restart` 不会修复旧镜像，必须先 build 再重建容器。
+ACL 通过仍不代表模型可推理，模型 READY 后继续执行下文真实图片验证。
+
 ## 从 A 的成功修改中合入的内容
 
 | A 的修改 | 内置 CANN 方案处理 |
@@ -43,15 +77,16 @@ TRITON_CANN_CONTAINER_NAME=triton-ascend-cann9-a-test
 TRITON_HTTP_PORT=55245
 TRITON_GRPC_PORT=55246
 TRITON_METRICS_PORT=55247
-ASCEND_DEVICE_ID=0
+ASCEND_DEVICE_ID=1
 YOLO26_MODEL_HOST_PATH=/A机器实际的绝对路径/yolo26s.om
 ```
 
-设备 0 仅为示例，按 A 的映射与占用选择；不要沿用 B 的设备 2。若没有空闲 NPU，应在维护
+设备 1 对应用户提供的 A 映射 NPU 96；部署时仍按最新映射与占用选择，不要沿用 B 的设备 2。若没有空闲 NPU，应在维护
 窗口验证，不要默认让新旧服务挤在同一设备。`privileged: true` 不提供设备隔离。
 端口 55245～55247 也应先确认未占用。实际配置中不能保留上述中文路径占位符。
 
-旧 Compose 1.22 没有现代 `--env-file` 参数。用受信任的 shell 兼容环境文件导入独立配置，
+A 使用新版 `docker compose`；B 的旧 Compose 1.22 没有现代 `--env-file` 参数。
+下面统一用受信任的 shell 兼容环境文件导入独立配置，
 同名 shell 变量会覆盖自动读取的旧 `.env`。以下示例必须在同一 Bash 终端执行，之后的每个
 Compose 命令都保留相同的 `-p triton-cann-a-test`：
 
@@ -62,25 +97,25 @@ set +a
 
 test -f "$YOLO26_MODEL_HOST_PATH"
 test -s "$YOLO26_MODEL_HOST_PATH"
-docker-compose -p triton-cann-a-test -f docker-compose.cann.yml config
-docker-compose -p triton-cann-a-test -f docker-compose.cann.yml build triton-ascend
+docker compose -p triton-cann-a-test -f docker-compose.cann.yml config
+docker compose -p triton-cann-a-test -f docker-compose.cann.yml build triton-ascend
 ```
 
 先检查动态库，再检查 ACL（前者输出不得有 `not found`）：
 
 ```bash
-docker-compose -p triton-cann-a-test -f docker-compose.cann.yml run --rm --no-deps triton-ascend \
+docker compose -p triton-cann-a-test -f docker-compose.cann.yml run --rm --no-deps triton-ascend \
   bash -c 'echo "$ASCEND_HOME_PATH"; ldd /models/YOLO26_DET_PRE/1/libtriton_yolo26_infer.so'
 
-docker-compose -p triton-cann-a-test -f docker-compose.cann.yml run --rm --no-deps triton-ascend \
+docker compose -p triton-cann-a-test -f docker-compose.cann.yml run --rm --no-deps triton-ascend \
   python3 /opt/triton-ascend/check-device.py
 ```
 
 检查成功后启动测试服务：
 
 ```bash
-docker-compose -p triton-cann-a-test -f docker-compose.cann.yml up -d --no-deps triton-ascend
-docker-compose -p triton-cann-a-test -f docker-compose.cann.yml logs --tail=200 triton-ascend
+docker compose -p triton-cann-a-test -f docker-compose.cann.yml up -d --no-deps triton-ascend
+docker compose -p triton-cann-a-test -f docker-compose.cann.yml logs --tail=200 triton-ascend
 curl -f "http://127.0.0.1:${TRITON_HTTP_PORT}/v2/models/YOLO26_DET_PRE_YUV_ENSEMBLE/ready"
 ```
 

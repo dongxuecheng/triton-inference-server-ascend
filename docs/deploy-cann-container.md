@@ -19,6 +19,8 @@ Compose 1.22 可解析的格式 2.4，不要求在宿主机安装 CANN Toolkit�
 
 不要将本文件的 `-f docker-compose.cann.yml` 与原 Compose 叠加，否则旧挂载可能被保留。
 不要挂载整个宿主机 `/usr/local/Ascend`，这会遮住镜像内的 CANN。
+启动脚本始终优先查找宿主机 `driver/lib64/driver`、`driver/lib64/common`、`driver/lib64`，
+再查找镜像 CANN 和已有环境路径；不要把 `develop/lib64` 放在真实驱动之前，以免加载另一份 HAL。
 以下统一使用 `-p triton-cann9` 隔离旧服务的 Compose 项目；若已有服务占用默认端口，
 还必须另外改端口和容器名。不同项目名不能隔离 NPU 计算资源。
 

@@ -100,6 +100,53 @@ class EntrypointTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("/fwkacllib/lib64", result.stdout)
 
+    def fake_driver_environment(self, injected_path=""):
+        host = self.root / "Ascend"
+        for directory in ["driver/lib64/driver", "driver/lib64/common", "driver/lib64", "develop/lib64"]:
+            (host / directory).mkdir(parents=True, exist_ok=True)
+        for directory in ["lib64", "runtime/lib64", "fwkacllib/lib64"]:
+            (self.cann / directory).mkdir(parents=True, exist_ok=True)
+        # 用临时目录模拟宿主机，不需要在测试机写 /usr/local/Ascend。
+        # Bash 的 pwd 也将 Windows 路径转成无盘符冒号的 POSIX 路径，方便解析库列表。
+        host_posix = subprocess.run([BASH, "-c", "pwd -P"], cwd=host,
+                                    capture_output=True, text=True, check=True).stdout.strip()
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copyfile(ROOT / "docker/entrypoint.sh", scripts / "entrypoint.sh")
+        source = (ROOT / "docker/cann-env.sh").read_text(encoding="utf-8")
+        (scripts / "cann-env.sh").write_text(source.replace("/usr/local/Ascend", host_posix), encoding="utf-8")
+        if injected_path:
+            # 模拟 set_env.sh 或镜像原有环境将 develop 放到最前面的情况。
+            (self.cann / "set_env.sh").write_text(
+                f'export LD_LIBRARY_PATH="{host_posix}/{injected_path}:/inherited/lib"\n', encoding="utf-8")
+        result = subprocess.run(
+            [BASH, str(scripts / "entrypoint.sh"), BASH, "-c", 'printf "%s" "$LD_LIBRARY_PATH"'],
+            env=dict(self.env, ASCEND_HOME_PATH=f"{host_posix}/../cann", LD_LIBRARY_PATH="/inherited/lib"),
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return host_posix, result.stdout.split(":")
+
+    def test_real_driver_paths_are_first_in_exact_priority_order(self):
+        host, paths = self.fake_driver_environment()
+        expected = [f"{host}/driver/lib64/driver", f"{host}/driver/lib64/common", f"{host}/driver/lib64"]
+        self.assertEqual(paths[:3], expected)
+        self.assertTrue(paths[3].endswith("/cann/lib64"))
+        self.assertTrue(paths[4].endswith("/cann/runtime/lib64"))
+        self.assertTrue(paths[5].endswith("/cann/fwkacllib/lib64"))
+        self.assertEqual(paths[-1], "/inherited/lib")
+
+    def test_existing_develop_path_cannot_override_real_driver(self):
+        host, paths = self.fake_driver_environment("develop/lib64")
+        self.assertEqual(paths[0], f"{host}/driver/lib64/driver")
+        self.assertGreater(paths.index(f"{host}/develop/lib64"), paths.index(f"{host}/driver/lib64"))
+        self.assertEqual(paths[-1], "/inherited/lib")
+
+    def test_develop_and_stub_directories_are_not_automatically_added(self):
+        host, paths = self.fake_driver_environment()
+        self.assertNotIn(f"{host}/develop/lib64", paths)
+        self.assertFalse(any("/devlib" in path or "/stub" in path for path in paths))
+
 
 @unittest.skipUnless(BASH, "Bash required")
 class BuildPreflightTests(unittest.TestCase):
