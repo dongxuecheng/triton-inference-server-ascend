@@ -30,12 +30,8 @@ if(NOT EXISTS "${TRITON_CORE_INCLUDE_DIR}/triton/core/tritonbackend.h")
     message(FATAL_ERROR "Set TRITON_CORE_INCLUDE_DIR to Triton core/include")
 endif()
 
-find_path(ACL_INCLUDE_DIR acl/acl.h
-    HINTS "${ASCEND_CANN_PACKAGE_PATH}/include"
-    REQUIRED)
-find_library(ASCENDCL_LIBRARY ascendcl
-    HINTS "${ASCEND_CANN_PACKAGE_PATH}/runtime/lib64"
-    REQUIRED)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/AscendToolkit.cmake")
+triton_find_acl("${ASCEND_CANN_PACKAGE_PATH}")
 
 # Headers are included as "common/..." and "<backend>/...", so `src` is the
 # include root.
@@ -53,7 +49,7 @@ add_library(triton_ascend_canvas_pool SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/src/common/ascend_canvas_pool.cc)
 set_target_properties(triton_ascend_canvas_pool PROPERTIES
     OUTPUT_NAME "triton_ascend_canvas_pool"
-    BUILD_RPATH "${ASCEND_CANN_PACKAGE_PATH}/runtime/lib64")
+    BUILD_RPATH "${ASCEND_RUNTIME_LIBRARY_DIR}")
 target_link_libraries(triton_ascend_canvas_pool PRIVATE "${ASCENDCL_LIBRARY}")
 
 # Ascend C kernel library used by the preprocess backend only.
@@ -70,8 +66,8 @@ set(PREPROCESS_SOURCES
 add_library(triton_preprocess SHARED ${PREPROCESS_SOURCES})
 set_target_properties(triton_preprocess PROPERTIES
     OUTPUT_NAME "triton_preprocess"
-    BUILD_RPATH "${ASCEND_CANN_PACKAGE_PATH}/runtime/lib64"
-    INSTALL_RPATH "${ASCEND_CANN_PACKAGE_PATH}/runtime/lib64;$ORIGIN")
+    BUILD_RPATH "${ASCEND_RUNTIME_LIBRARY_DIR}"
+    INSTALL_RPATH "${ASCEND_RUNTIME_LIBRARY_DIR};$ORIGIN")
 target_link_libraries(triton_preprocess PRIVATE
     yolo_preprocess_kernel
     triton_ascend_canvas_pool
@@ -93,8 +89,8 @@ set(RGB_PREPROCESS_SOURCES
 add_library(triton_rgb_preprocess SHARED ${RGB_PREPROCESS_SOURCES})
 set_target_properties(triton_rgb_preprocess PROPERTIES
     OUTPUT_NAME "triton_rgb_preprocess"
-    BUILD_RPATH "${ASCEND_CANN_PACKAGE_PATH}/runtime/lib64"
-    INSTALL_RPATH "${ASCEND_CANN_PACKAGE_PATH}/runtime/lib64;$ORIGIN")
+    BUILD_RPATH "${ASCEND_RUNTIME_LIBRARY_DIR}"
+    INSTALL_RPATH "${ASCEND_RUNTIME_LIBRARY_DIR};$ORIGIN")
 target_link_libraries(triton_rgb_preprocess PRIVATE
     yolo_rgb_preprocess_kernel
     "${ASCENDCL_LIBRARY}"
@@ -111,8 +107,8 @@ set(YOLOINFER_SOURCES
 add_library(triton_yoloinfer SHARED ${YOLOINFER_SOURCES})
 set_target_properties(triton_yoloinfer PROPERTIES
     OUTPUT_NAME "triton_yoloinfer"
-    BUILD_RPATH "${ASCEND_CANN_PACKAGE_PATH}/runtime/lib64"
-    INSTALL_RPATH "${ASCEND_CANN_PACKAGE_PATH}/runtime/lib64;$ORIGIN")
+    BUILD_RPATH "${ASCEND_RUNTIME_LIBRARY_DIR}"
+    INSTALL_RPATH "${ASCEND_RUNTIME_LIBRARY_DIR};$ORIGIN")
 target_link_libraries(triton_yoloinfer PRIVATE
     triton_ascend_canvas_pool
     "${ASCENDCL_LIBRARY}"
@@ -133,8 +129,8 @@ set(YOLO26_INFER_SOURCES
 add_library(triton_yolo26_infer SHARED ${YOLO26_INFER_SOURCES})
 set_target_properties(triton_yolo26_infer PROPERTIES
     OUTPUT_NAME "triton_yolo26_infer"
-    BUILD_RPATH "${ASCEND_CANN_PACKAGE_PATH}/runtime/lib64"
-    INSTALL_RPATH "${ASCEND_CANN_PACKAGE_PATH}/runtime/lib64;$ORIGIN")
+    BUILD_RPATH "${ASCEND_RUNTIME_LIBRARY_DIR}"
+    INSTALL_RPATH "${ASCEND_RUNTIME_LIBRARY_DIR};$ORIGIN")
 target_link_libraries(triton_yolo26_infer PRIVATE
     triton_ascend_canvas_pool
     "${ASCENDCL_LIBRARY}"

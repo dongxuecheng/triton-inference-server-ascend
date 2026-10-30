@@ -17,10 +17,7 @@ parameters: {
   key: "model_path"
   value: { string_value: "/models/YOLO26_DET_PRE_HOST/1/yolo26s.om" }
 }
-parameters: {
-  key: "device_id"
-  value: { string_value: "0" }
-}
+# 不写死设备编号，由 ASCEND_DEVICE_ID 统一控制预处理和推理设备。
 
 input [
   {

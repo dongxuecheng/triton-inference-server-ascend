@@ -8,10 +8,7 @@ parameters: {
   key: "model_path"
   value: { string_value: "/yolo/yolo11s.om" }
 }
-parameters: {
-  key: "device_id"
-  value: { string_value: "0" }
-}
+# 不写死设备编号，由 ASCEND_DEVICE_ID 统一控制预处理和推理设备。
 
 # Host-tensor variant for callers that already hold an NV12 canvas, such as an
 # external decoder or a DVPP pipeline. The ensemble uses yolo11_infer instead,

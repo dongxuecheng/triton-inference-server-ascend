@@ -10,11 +10,7 @@ parameters: {
   key: "model_path"
   value: { string_value: "/models/YOLO26_DET_PRE/1/yolo26s.om" }
 }
-# NPU to load the model onto. Defaults to ASCEND_DEVICE_ID when unset.
-parameters: {
-  key: "device_id"
-  value: { string_value: "0" }
-}
+# 不写死设备编号，由 ASCEND_DEVICE_ID 统一控制预处理和推理设备。
 
 # Device pass-through input: the 8 byte handle published by the preprocess
 # backend carries the device address of an NV12 canvas, so the ensemble never

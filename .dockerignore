@@ -1,0 +1,15 @@
+.git
+.env
+.env.*
+!.env.example
+build
+tests
+__pycache__
+**/__pycache__
+*.pyc
+**/*.om
+**/*.onnx
+**/*.plan
+**/*.so
+**/*.docker.tar
+workspace/detections

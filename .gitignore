@@ -10,6 +10,10 @@ workspace/detections/
 
 # Local configuration derived from .env.example
 .env
+.env.cann
+.env.cann.a
+.env.cann.b
+*.docker.tar
 
 # Deployment copies of the backend libraries. They are produced by build.sh
 # from the build tree, so they are not tracked.

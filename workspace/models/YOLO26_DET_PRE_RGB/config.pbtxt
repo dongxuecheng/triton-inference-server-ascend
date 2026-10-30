@@ -16,11 +16,7 @@ parameters: {
   key: "model_path"
   value: { string_value: "/models/YOLO26_DET_PRE_RGB/1/yolo26s_noaipp.om" }
 }
-# NPU to load the model onto. Defaults to ASCEND_DEVICE_ID when unset.
-parameters: {
-  key: "device_id"
-  value: { string_value: "0" }
-}
+# 不写死设备编号，由 ASCEND_DEVICE_ID 统一控制预处理和推理设备。
 # `nv12` (the default) expects the canvas `preprocess` writes; `rgb_chw` expects
 # the image tensor `rgb_preprocess` writes. Pair it with that backend's model in
 # an ensemble.

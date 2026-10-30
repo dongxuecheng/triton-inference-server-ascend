@@ -1,5 +1,11 @@
 # Ascend Triton YOLO 推理服务
 
+麒麟 ARM64 / Docker 18.09 / Compose 1.22、宿主机不安装 Toolkit 的部署方式，见
+[内置 CANN 9.0.0 镜像部署指南](docs/deploy-cann-container.md)。该方式单独使用
+`Dockerfile.cann` 和 `docker-compose.cann.yml`，原有宿主机 Toolkit 挂载方式保持不变。
+已有 A 机器成功配置、需要先在 A 验证再迁移 B 的步骤，见
+[A/B 验证与镜像迁移](docs/validate-a-then-b.md)。
+
 这是运行在 Ascend 310P3 上的 Triton 自定义后端项目，支持 YOLO11、YOLO26，以及 BGR、NV12/YUV420SP 和无 AIPP 的 RGB 输入路径。
 
 项目提供 C++ Triton 后端、Ascend C 预处理内核、YOLO 推理与后处理后端、Triton 模型仓库、Docker Compose 服务配置，以及 Python 客户端和结果可视化工具。

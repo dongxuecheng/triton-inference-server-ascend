@@ -22,11 +22,22 @@ MODELS_DIR="${SCRIPT_DIR}/workspace/models"
 ASCEND_HOME_PATH="${ASCEND_HOME_PATH:-/usr/local/Ascend/ascend-toolkit/latest}"
 SOC_VERSION="${SOC_VERSION:-Ascend310P3}"
 
-if [ ! -f "${ASCEND_HOME_PATH}/include/acl/acl.h" ]; then
-    echo "[build.sh] ERROR: CANN toolkit not found at ${ASCEND_HOME_PATH}" >&2
-    echo "[build.sh] Set ASCEND_HOME_PATH to a CANN installation that contains include/acl/acl.h" >&2
+HOST_ARCH=$(uname -m)
+ACL_INCLUDE_DIR=""
+for candidate in "${ASCEND_HOME_PATH}/include" "${ASCEND_HOME_PATH}/${HOST_ARCH}-linux/include"; do
+    if [ -f "${candidate}/acl/acl.h" ]; then
+        ACL_INCLUDE_DIR="${candidate}"
+        break
+    fi
+done
+if [ -z "${ACL_INCLUDE_DIR}" ]; then
+    echo "[build.sh] ERROR: acl/acl.h not found under ${ASCEND_HOME_PATH}" >&2
+    echo "[build.sh] Checked:" >&2
+    echo "  ${ASCEND_HOME_PATH}/include/acl/acl.h" >&2
+    echo "  ${ASCEND_HOME_PATH}/${HOST_ARCH}-linux/include/acl/acl.h" >&2
     exit 1
 fi
+echo "[build.sh] ACL include: ${ACL_INCLUDE_DIR}"
 
 # Prefer the bundled headers, but fall back to a Triton installation if present.
 if [ -z "${TRITON_DIR}" ]; then

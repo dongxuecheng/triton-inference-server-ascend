@@ -13,13 +13,9 @@ if(NOT ASCEND_CANN_PACKAGE_PATH)
     message(FATAL_ERROR "Set ASCEND_HOME_PATH or ASCEND_CANN_PACKAGE_PATH to the CANN toolkit")
 endif()
 
-set(ASCENDC_CMAKE_DIR "${ASCEND_CANN_PACKAGE_PATH}/tools/tikcpp/ascendc_kernel_cmake")
-if(NOT EXISTS "${ASCENDC_CMAKE_DIR}/ascendc.cmake")
-    set(ASCENDC_CMAKE_DIR "${ASCEND_CANN_PACKAGE_PATH}/compiler/tikcpp/ascendc_kernel_cmake")
-endif()
-if(NOT EXISTS "${ASCENDC_CMAKE_DIR}/ascendc.cmake")
-    message(FATAL_ERROR "ascendc.cmake not found under ${ASCEND_CANN_PACKAGE_PATH}")
-endif()
+set(ASCENDC_CMAKE_DIR "" CACHE PATH "Directory containing ascendc.cmake (optional override)")
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/AscendToolkit.cmake")
+triton_find_ascendc("${ASCEND_CANN_PACKAGE_PATH}")
 
 include("${ASCENDC_CMAKE_DIR}/ascendc.cmake")
 ascendc_library(yolo_preprocess_kernel SHARED

@@ -1,0 +1,31 @@
+version: "2.4"
+
+services:
+  triton-ascend:
+    build:
+      context: .
+      dockerfile: Dockerfile.cann
+      args:
+        CANN_IMAGE: ${CANN_IMAGE:-swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.0.0-310p-ubuntu22.04-py3.11}
+        TRITON_BASE_IMAGE: ${TRITON_BASE_IMAGE:-nvcr.io/nvidia/tritonserver:24.10-py3}
+        SOC_VERSION: Ascend310P3
+    image: ${TRITON_CANN_IMAGE:-triton-ascend-cann:24.10-cann9.0.0}
+    container_name: ${TRITON_CANN_CONTAINER_NAME:-triton-ascend-cann9}
+    # 与原仓库保持一致，保留全部设备可见性，从而使用宿主机 ACL 逻辑编号。
+    # privileged 不提供设备隔离；确认容器内映射后再进行生产环境权限收敛。
+    privileged: true
+    ipc: host
+    ports:
+      - "${TRITON_HTTP_PORT:-54245}:8000"
+      - "${TRITON_GRPC_PORT:-54246}:8001"
+      - "${TRITON_METRICS_PORT:-54247}:8002"
+    environment:
+      ASCEND_DEVICE_ID: "${ASCEND_DEVICE_ID:-2}"
+      ASCEND_CANVAS_SLOTS: "${ASCEND_CANVAS_SLOTS:-8}"
+      TRITON_LOG_VERBOSE: "${TRITON_LOG_VERBOSE:-0}"
+    volumes:
+      - /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+      - /usr/local/Ascend/develop:/usr/local/Ascend/develop:ro
+      - /etc/ascend_install.info:/etc/ascend_install.info:ro
+      - ${YOLO26_MODEL_HOST_PATH:-./workspace/models/YOLO26_DET_PRE/1/yolo26s.om}:/models/YOLO26_DET_PRE/1/yolo26s.om:ro
+    restart: unless-stopped
